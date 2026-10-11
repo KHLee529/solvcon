@@ -103,7 +103,7 @@ jobs:
           sparse-checkout: |
             Makefile
             contrib/ci/release.sh
-            contrib/bundle/bundle-with-homebrew.sh
+            contrib/bundle/bundle-with-devenv.sh
           sparse-checkout-cone-mode: false
 
       - uses: actions/download-artifact@v8

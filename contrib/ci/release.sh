@@ -5,7 +5,7 @@
 #
 # Stages of the release pipeline driven by .github/workflows/release.yml. Each
 # subcommand is one stage, so a stage that fails in CI can be rerun by hand on
-# a macOS host with Homebrew:
+# a macOS host:
 #
 #   contrib/ci/release.sh setup
 #   contrib/ci/release.sh build
@@ -13,7 +13,9 @@
 #   contrib/ci/release.sh unbox dist/solvcon-pilot-v0.0.0-macos-arm64.dmg
 #
 # VERSION names the packaged file (default: the short commit hash), and
-# DIST_DIR is where package writes it (default: dist).
+# DIST_DIR is where package writes it (default: dist). The dependencies come
+# from the devenv flavor that contrib/dependency/build-mmenv.sh builds; its
+# MMENV_* variables select the flavor.
 #
 # The macOS DMG produced by the `make bundle` targets is the only release
 # artifact so far. A new platform adds its own branch to each stage.
@@ -22,9 +24,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-# bundle-with-homebrew.sh reads the pilot build from this tree, so build must
+MMENV=contrib/dependency/build-mmenv.sh
+# bundle-with-devenv.sh reads the pilot build from this tree, so build must
 # write it here for package to run with --skip-build.
-BUNDLE_BUILD_PATH=build/relbundle
+export BUNDLE_BUILD_PATH=build/relbundle
+export BUNDLE_WITH=devenv
 DIST_DIR="${DIST_DIR:-dist}"
 
 artifact_name() {
@@ -34,16 +38,28 @@ artifact_name() {
     printf 'solvcon-pilot-%s-macos-%s.dmg\n' "$version" "$arch"
 }
 
+# What `devenv use` does for the flavor, without needing devenv itself.
+activate_flavor() {
+    local prefix
+    prefix=$("$MMENV" --print-prefix)
+    export DEVENVPREFIX="$prefix"
+    export PATH="$prefix/bin:$PATH"
+    export CMAKE_PREFIX_PATH="$prefix"
+}
+
 stage_setup() {
-    export HOMEBREW_NO_AUTO_UPDATE=1
-    export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
-    # The bundle copies Python and Qt out of the Homebrew prefix, so every
-    # runtime dependency has to come from Homebrew, not pip or aqt.
-    brew install cmake qt pyside python numpy python-matplotlib pybind11
+    # A flavor already in place is reused, for reruns by hand.
+    if [[ -x "$("$MMENV" --print-prefix)/bin/python3" ]]; then
+        echo "reusing the flavor at $("$MMENV" --print-prefix)"
+    else
+        "$MMENV" --no-confirm
+    fi
+    activate_flavor
     make bundle-precheck
 }
 
 stage_build() {
+    activate_flavor
     make pilot BUILD_PATH="$BUNDLE_BUILD_PATH"
 }
 
@@ -51,6 +67,7 @@ stage_package() {
     local name
     name=$(artifact_name)
 
+    activate_flavor
     make bundle RELEASE_OUTPUT="$DIST_DIR" RELEASE_ARGS=--skip-build
 
     mv "$DIST_DIR/pilot.dmg" "$DIST_DIR/$name"
@@ -58,6 +75,7 @@ stage_package() {
     ls -lh "$DIST_DIR"
 }
 
+# No flavor is activated: the artifact has to run without one.
 stage_unbox() {
     local dmg="$1"
 
