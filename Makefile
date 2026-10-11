@@ -72,6 +72,10 @@ FORCE_CLANG_FORMAT ?=
 RELEASE_OUTPUT ?= $(SOLVCON_ROOT)/build
 RELEASE_ARTIFACT ?= $(RELEASE_OUTPUT)/pilot.dmg
 RELEASE_ARGS ?=
+# The dependency source the bundle targets package from: `homebrew`, or
+# `devenv` for the active devenv flavor (contrib/dependency/build-mmenv.sh).
+BUNDLE_WITH ?= homebrew
+BUNDLE_SCRIPT = $(SOLVCON_ROOT)/contrib/bundle/bundle-with-$(BUNDLE_WITH).sh
 
 # Let CMake find vcpkg-provided OpenBLAS/LAPACK headers, import libraries, and
 # package metadata during configure and link on Windows.
@@ -242,16 +246,16 @@ run_pilot_pytest: pilot
 
 .PHONY: bundle-precheck
 bundle-precheck:
-	$(SOLVCON_ROOT)/contrib/bundle/bundle-with-homebrew.sh check
+	$(BUNDLE_SCRIPT) check
 
 .PHONY: bundle
 bundle:
-	$(SOLVCON_ROOT)/contrib/bundle/bundle-with-homebrew.sh all \
+	$(BUNDLE_SCRIPT) all \
 		--output "$(RELEASE_OUTPUT)" $(RELEASE_ARGS)
 
 .PHONY: bundle-test
 bundle-test:
-	$(SOLVCON_ROOT)/contrib/bundle/bundle-with-homebrew.sh verify \
+	$(BUNDLE_SCRIPT) verify \
 		"$(RELEASE_ARTIFACT)"
 
 .PHONY: standalone_buffer_setup
