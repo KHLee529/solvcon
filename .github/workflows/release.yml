@@ -95,12 +95,13 @@ jobs:
 
     steps:
 
-      # The test needs the scripts only. Cone mode matches directories, not
-      # files, hence off.
+      # The test needs the Makefile and the scripts it runs only. Cone mode
+      # matches directories, not files, hence off.
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref || github.ref }}
           sparse-checkout: |
+            Makefile
             contrib/ci/release.sh
             contrib/bundle/bundle-with-homebrew.sh
           sparse-checkout-cone-mode: false

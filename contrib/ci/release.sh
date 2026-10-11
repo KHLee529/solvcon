@@ -15,14 +15,13 @@
 # VERSION names the packaged file (default: the short commit hash), and
 # DIST_DIR is where package writes it (default: dist).
 #
-# The macOS DMG produced by contrib/bundle/bundle-with-homebrew.sh is the only
-# release artifact so far. A new platform adds its own branch to each stage.
+# The macOS DMG produced by the `make bundle` targets is the only release
+# artifact so far. A new platform adds its own branch to each stage.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-BUNDLE=contrib/bundle/bundle-with-homebrew.sh
 # bundle-with-homebrew.sh reads the pilot build from this tree, so build must
 # write it here for package to run with --skip-build.
 BUNDLE_BUILD_PATH=build/relbundle
@@ -41,7 +40,7 @@ stage_setup() {
     # The bundle copies Python and Qt out of the Homebrew prefix, so every
     # runtime dependency has to come from Homebrew, not pip or aqt.
     brew install cmake qt pyside python numpy python-matplotlib pybind11
-    "$BUNDLE" check
+    make bundle-precheck
 }
 
 stage_build() {
@@ -52,7 +51,7 @@ stage_package() {
     local name
     name=$(artifact_name)
 
-    "$BUNDLE" bundle --skip-build --output "$DIST_DIR"
+    make bundle RELEASE_OUTPUT="$DIST_DIR" RELEASE_ARGS=--skip-build
 
     mv "$DIST_DIR/pilot.dmg" "$DIST_DIR/$name"
     (cd "$DIST_DIR" && shasum -a 256 "$name" > "$name.sha256")
@@ -63,7 +62,7 @@ stage_unbox() {
     local dmg="$1"
 
     (cd "$(dirname "$dmg")" && shasum -a 256 -c "$(basename "$dmg").sha256")
-    "$BUNDLE" verify "$dmg"
+    make bundle-test RELEASE_ARTIFACT="$dmg"
 }
 
 case "${1:-}" in
