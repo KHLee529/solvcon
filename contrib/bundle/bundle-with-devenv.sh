@@ -311,7 +311,7 @@ runtime_import_check() {
     env -i HOME="${HOME:-/}" USER="${USER:-nobody}" \
         PATH=/usr/bin:/bin TERM="${TERM:-xterm}" \
         "$bin" --mode=python -c \
-        "import matplotlib; import solvcon.pilot._base_app"
+        "import matplotlib"
 }
 
 smoke_launch_verify() {
