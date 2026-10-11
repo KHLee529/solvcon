@@ -95,15 +95,19 @@ jobs:
 
     steps:
 
-      # The test needs the Makefile and the scripts it runs only. Cone mode
-      # matches directories, not files, hence off.
+      # The tests need the Makefile, the scripts they run, the pytest pin, and
+      # the GUI tests only. Leaving solvcon/ out keeps the GUI tests on the
+      # bundled package. Cone mode matches directories, not files, hence off.
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref || github.ref }}
           sparse-checkout: |
             Makefile
+            requirements.txt
             contrib/ci/release.sh
             contrib/bundle/bundle-with-devenv.sh
+            tests/conftest.py
+            tests/gui/
           sparse-checkout-cone-mode: false
 
       - uses: actions/download-artifact@v8
@@ -115,6 +119,15 @@ jobs:
         run: |
           for dmg in dist/*.dmg; do
             contrib/ci/release.sh unbox "$dmg"
+          done
+
+      # Run the GUI tests in the app even when the verification above failed,
+      # so each check reports on its own.
+      - name: gui test
+        if: success() || failure()
+        run: |
+          for dmg in dist/*.dmg; do
+            contrib/ci/release.sh guitest "$dmg"
           done
 
   publish:
