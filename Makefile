@@ -72,6 +72,7 @@ FORCE_CLANG_FORMAT ?=
 RELEASE_OUTPUT ?= $(SOLVCON_ROOT)/build
 RELEASE_ARTIFACT ?= $(RELEASE_OUTPUT)/pilot.dmg
 RELEASE_ARGS ?=
+RELEASE_VERSION ?=
 
 # Let CMake find vcpkg-provided OpenBLAS/LAPACK headers, import libraries, and
 # package metadata during configure and link on Windows.
@@ -251,12 +252,14 @@ bundle-precheck:
 .PHONY: bundle
 bundle:
 	$(SOLVCON_ROOT)/contrib/bundle/bundle-with-aqt.sh all \
-		--output "$(RELEASE_OUTPUT)" $(RELEASE_ARGS)
+		--output "$(RELEASE_OUTPUT)" \
+		$(if $(RELEASE_VERSION),--version "$(RELEASE_VERSION)") $(RELEASE_ARGS)
 
 .PHONY: bundle-test
 bundle-test:
 	$(SOLVCON_ROOT)/contrib/bundle/bundle-with-aqt.sh verify \
-		"$(RELEASE_ARTIFACT)"
+		"$(RELEASE_ARTIFACT)" \
+		$(if $(RELEASE_VERSION),--version "$(RELEASE_VERSION)")
 
 .PHONY: standalone_buffer_setup
 standalone_buffer_setup:

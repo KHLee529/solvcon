@@ -94,6 +94,10 @@ jobs:
 
       fail-fast: false
 
+    env:
+      # The same version the build job stamped, for unbox to check.
+      VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
+
     steps:
 
       # The tests need the Makefile, the scripts they run, and the GUI tests

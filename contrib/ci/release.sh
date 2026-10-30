@@ -8,14 +8,18 @@
 # an Apple Silicon macOS host:
 #
 #   contrib/ci/release.sh setup
-#   contrib/ci/release.sh build
+#   VERSION=v0.0.0 contrib/ci/release.sh build
 #   VERSION=v0.0.0 contrib/ci/release.sh package
-#   contrib/ci/release.sh unbox dist/solvcon-pilot-v0.0.0-macos-arm64.dmg
+#   VERSION=v0.0.0 contrib/ci/release.sh unbox \
+#       dist/solvcon-pilot-v0.0.0-macos-arm64.dmg
 #   contrib/ci/release.sh guitest dist/solvcon-pilot-v0.0.0-macos-arm64.dmg
 #
-# VERSION names the packaged file (default: the short commit hash), and
-# DIST_DIR is where package writes it (default: dist). The dependencies are
-# the ones contrib/bundle/prepare-with-aqt.sh pins under build/bundle-deps.
+# VERSION names the packaged file (default: the short commit hash). In the
+# form vX.Y.Z or vX.Y.Z-SUFFIX, build also stamps it into the app's
+# Info.plist and unbox checks it there, so give those stages the same
+# VERSION. DIST_DIR is where package writes the file (default: dist). The
+# dependencies are the ones contrib/bundle/prepare-with-aqt.sh pins under
+# build/bundle-deps.
 #
 # The macOS DMG produced by the `make bundle` targets is the only release
 # artifact so far. A new platform adds its own branch to each stage.
@@ -56,7 +60,7 @@ stage_build() {
     # SOURCE_DATE_EPOCH instead when set, so two builds of a commit match.
     SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
     export SOURCE_DATE_EPOCH
-    make bundle RELEASE_OUTPUT="$BUNDLE_OUTPUT"
+    make bundle RELEASE_OUTPUT="$BUNDLE_OUTPUT" RELEASE_VERSION="${VERSION:-}"
 }
 
 stage_package() {
@@ -74,7 +78,7 @@ stage_unbox() {
     local dmg="$1"
 
     (cd "$(dirname "$dmg")" && shasum -a 256 -c "$(basename "$dmg").sha256")
-    make bundle-test RELEASE_ARTIFACT="$dmg"
+    make bundle-test RELEASE_ARTIFACT="$dmg" RELEASE_VERSION="${VERSION:-}"
 }
 
 GUITEST_ROOT=""
