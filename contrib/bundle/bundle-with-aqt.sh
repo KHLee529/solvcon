@@ -13,15 +13,20 @@
 #   ./contrib/bundle/bundle-with-aqt.sh bundle [--skip-build]
 #                                                   [--skip-check]
 #                                                   [--output DIR]
+#                                                   [--version VER]
 #   ./contrib/bundle/bundle-with-aqt.sh verify path/to/pilot.dmg
+#                                                   [--version VER]
 #
 # Legacy usage without a subcommand still runs the bundle step:
 #   ./contrib/bundle/bundle-with-aqt.sh [--skip-build] [--skip-check]
-#                                            [--output DIR]
+#                                            [--output DIR] [--version VER]
 #
 #   --skip-build   Skip `make pilot` and use the existing build output.
 #   --skip-check   Skip the bundle/DMG verification phase.
 #   --output DIR   Write pilot.dmg into DIR (default: build/).
+#   --version VER  Release version, vX.Y.Z or vX.Y.Z-SUFFIX, stamped into
+#                  Info.plist by bundle and expected there by verify. Without
+#                  it, bundle stamps 0.0.0 and verify checks no version.
 
 set -euo pipefail
 
@@ -34,6 +39,7 @@ SDK_ROOT="$BUNDLE_REPO_ROOT/build/bundle-deps/sdk"
 PREFIX=""
 TOOLS_PREFIX="$BUNDLE_REPO_ROOT/build/bundle-deps/tools"
 HOST_PREFIX_RE="^(${SDK_ROOT//./\.}|${TOOLS_PREFIX//./\.})"
+BUNDLE_ID=net.solvcon.pilot
 export PYTHONNOUSERSITE=1
 unset PYTHONHOME PYTHONPATH
 
@@ -45,9 +51,9 @@ usage() {
     cat <<'EOF'
 Usage:
   contrib/bundle/bundle-with-aqt.sh check
-  contrib/bundle/bundle-with-aqt.sh bundle [--skip-build] [--skip-check] [--output DIR]
-  contrib/bundle/bundle-with-aqt.sh verify path/to/pilot.dmg
-  contrib/bundle/bundle-with-aqt.sh all [--skip-build] [--skip-check] [--output DIR]
+  contrib/bundle/bundle-with-aqt.sh bundle [--skip-build] [--skip-check] [--output DIR] [--version VER]
+  contrib/bundle/bundle-with-aqt.sh verify path/to/pilot.dmg [--version VER]
+  contrib/bundle/bundle-with-aqt.sh all [--skip-build] [--skip-check] [--output DIR] [--version VER]
 
 Subcommands:
   check    Check macOS bundle release dependencies. Does not build or install.
@@ -214,6 +220,42 @@ binary_rpaths() {
     '
 }
 
+# Print the minimum macOS the Mach-O at $1 was built for: `minos` of
+# LC_BUILD_VERSION, or `version` of the older LC_VERSION_MIN_MACOSX. Print
+# nothing when the file carries neither.
+binary_minos() {
+    otool -l "$1" 2>/dev/null | awk '
+        /^[[:space:]]*cmd /                    { c = 0 }
+        /cmd LC_(BUILD_VERSION|VERSION_MIN_MACOSX)$/ { c = 1; next }
+        c && ($1 == "minos" || $1 == "version") { print $2; exit }
+    '
+}
+
+# Succeed when the dotted version $1 is at least $2, comparing numerically
+# field by field so that 26.0 >= 26 and 13.10 > 13.9.
+version_ge() {
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        n = split(a, x, "."); m = split(b, y, ".")
+        for (i = 1; i <= (n > m ? n : m); i++)
+            if (x[i] + 0 != y[i] + 0) exit !(x[i] + 0 > y[i] + 0)
+        exit 0
+    }'
+}
+
+# Print the highest minimum macOS among the Mach-O files under $1, which is
+# the oldest macOS the whole bundle can load on.
+bundle_minos() {
+    local f v max=""
+    while IFS= read -r -d '' f; do
+        v=$(binary_minos "$f")
+        [[ -n "$v" ]] || continue
+        if [[ -z "$max" ]] || ! version_ge "$max" "$v"; then
+            max="$v"
+        fi
+    done < <(list_macho "$1")
+    printf '%s\n' "$max"
+}
+
 # Verify the .app under $1 contains no surviving dependency prefix reference
 # with both LC_LOAD_DYLIB-style commands (visible via otool -L) and LC_RPATH
 # search paths. Print offenders. Return 0 if clean and 1 otherwise.
@@ -248,6 +290,48 @@ verify_app_structure() {
     [[ -d "$app/Contents/Frameworks" ]] || fail "Contents/Frameworks not found"
     [[ -d "$app/Contents/Resources" ]] || fail "Contents/Resources not found"
     file "$bin"
+}
+
+# Print the value at key path $2 (dot-separated) of the plist $1.
+plist_value() {
+    plutil -extract "$2" raw -o - "$1" 2>/dev/null
+}
+
+# Check the Info.plist of the app at $1 against what write_info_plist stamps.
+# The versions are checked only when SHORT_VERSION is set, i.e., when the
+# version was given.
+check_info_plist() {
+    local app="$1" plist="$1/Contents/Info.plist" value minos
+    plutil -lint -s "$plist" || fail "Info.plist is malformed: $plist"
+
+    value=$(plist_value "$plist" CFBundleExecutable)
+    [[ "$value" == "$(basename "$app" .app)" ]] || \
+        fail "CFBundleExecutable is '$value', not the main binary"
+    value=$(plist_value "$plist" CFBundleIdentifier)
+    [[ "$value" == "$BUNDLE_ID" ]] || \
+        fail "CFBundleIdentifier is '$value', not $BUNDLE_ID"
+    value=$(plist_value "$plist" LSEnvironment.PYTHONNOUSERSITE)
+    [[ "$value" == "1" ]] || \
+        fail "LSEnvironment.PYTHONNOUSERSITE is '$value', not 1"
+
+    value=$(plist_value "$plist" LSMinimumSystemVersion)
+    minos=$(bundle_minos "$app")
+    [[ -n "$value" ]] || fail "LSMinimumSystemVersion is not set"
+    version_ge "$value" "$minos" || \
+        fail "LSMinimumSystemVersion $value is below $minos required by a bundled binary"
+
+    if [[ -n "$SHORT_VERSION" ]]; then
+        value=$(plist_value "$plist" CFBundleShortVersionString)
+        [[ "$value" == "$SHORT_VERSION" ]] || \
+            fail "CFBundleShortVersionString is '$value', not $SHORT_VERSION"
+        value=$(plist_value "$plist" CFBundleVersion)
+        [[ "$value" == "$BUNDLE_VERSION" ]] || \
+            fail "CFBundleVersion is '$value', not $BUNDLE_VERSION"
+    fi
+    ok "Info.plist $BUNDLE_ID" \
+        "$(plist_value "$plist" CFBundleShortVersionString)" \
+        "($(plist_value "$plist" CFBundleVersion))," \
+        "macOS $(plist_value "$plist" LSMinimumSystemVersion) or later"
 }
 
 runtime_import_check() {
@@ -340,6 +424,7 @@ verify_dmg() {
 
     note "Checking mounted app structure"
     verify_app_structure "$app"
+    check_info_plist "$app"
 
     note "Checking code signature before launch"
     codesign --verify --deep --strict "$app"
@@ -389,7 +474,7 @@ case "$COMMAND" in
         [[ $# -eq 0 ]] || { usage >&2; exit 2; }
         ;;
     verify)
-        [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+        [[ $# -ge 1 ]] || { usage >&2; exit 2; }
         VERIFY_ARTIFACT="$1"
         shift
         ;;
@@ -398,23 +483,45 @@ esac
 SKIP_BUILD=0
 SKIP_CHECK=0
 OUTPUT_DIR="$BUNDLE_REPO_ROOT/build"
+VERSION_ARG=""
 
 if [[ "$COMMAND" == "bundle" || "$COMMAND" == "all" ]]; then
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --skip-build) SKIP_BUILD=1    ; shift ;;
             --skip-check) SKIP_CHECK=1    ; shift ;;
-            --output)
-                [[ $# -ge 2 ]] || { echo "Missing argument for --output" >&2; usage >&2; exit 2; }
-                OUTPUT_DIR="$2"
+            --output|--version)
+                [[ $# -ge 2 ]] || { echo "Missing argument for $1" >&2; usage >&2; exit 2; }
+                if [[ "$1" == --output ]]; then OUTPUT_DIR="$2"; else VERSION_ARG="$2"; fi
                 shift 2
                 ;;
             *) echo "Unknown option: $1" >&2 ; usage >&2 ; exit 1 ;;
         esac
     done
+elif [[ "$COMMAND" == "verify" && $# -gt 0 ]]; then
+    [[ $# -eq 2 && "$1" == --version ]] || { usage >&2; exit 2; }
+    VERSION_ARG="$2"
+    shift 2
 elif [[ $# -gt 0 ]]; then
     usage >&2
     exit 2
+fi
+
+# CFBundleShortVersionString takes three integers only, so the version suffix
+# (e.g., -rc1) goes to CFBundleVersion alone. Without a version, bundle stamps
+# 0.0.0 with the commit in CFBundleVersion, and verify checks no version.
+SHORT_VERSION=""
+BUNDLE_VERSION=""
+if [[ -n "$VERSION_ARG" ]]; then
+    if [[ "$VERSION_ARG" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+)(-[0-9A-Za-z.-]+)?$ ]]; then
+        SHORT_VERSION="${BASH_REMATCH[1]}"
+        BUNDLE_VERSION="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+    else
+        fail "version '$VERSION_ARG' is not vX.Y.Z or vX.Y.Z-SUFFIX" || exit 2
+    fi
+elif [[ "$COMMAND" == "bundle" || "$COMMAND" == "all" ]]; then
+    SHORT_VERSION=0.0.0
+    BUNDLE_VERSION="0.0.0-g$(git rev-parse --short HEAD)"
 fi
 
 if [[ "$COMMAND" == "bundle" || "$COMMAND" == "all" ]]; then
@@ -905,35 +1012,6 @@ thin_bundle_arm64() {
     echo "    thinned $count universal Mach-O file(s) to arm64"
 }
 
-# Set PYTHONNOUSERSITE=1 in LSEnvironment so a Finder/open launch of pilot
-# never adds ~/Library/Python/<X.Y>/lib/python/site-packages to sys.path,
-# which on dev machines may carry a second PySide6 and Qt runtime.
-inject_pythonnousersite() {
-    local plist="$APP/Contents/Info.plist"
-    [[ -f "$plist" ]] || { echo "    SKIP: no Info.plist at $plist" >&2; return 0; }
-    # macdeployqt's Step 2 codesign locks Info.plist read-only; Step 7
-    # re-locks it.
-    chmod u+w "$plist"
-    if /usr/libexec/PlistBuddy -c "Print :LSEnvironment:PYTHONNOUSERSITE" \
-            "$plist" >/dev/null 2>&1; then
-        /usr/libexec/PlistBuddy -c \
-            "Set :LSEnvironment:PYTHONNOUSERSITE 1" "$plist" || {
-            fail "failed to set LSEnvironment.PYTHONNOUSERSITE"
-            return 1
-        }
-    else
-        # Dict may already exist; tolerate either way.
-        /usr/libexec/PlistBuddy -c "Add :LSEnvironment dict" "$plist" \
-            2>/dev/null || true
-        /usr/libexec/PlistBuddy -c \
-            "Add :LSEnvironment:PYTHONNOUSERSITE string 1" "$plist" || {
-            fail "failed to add LSEnvironment.PYTHONNOUSERSITE"
-            return 1
-        }
-    fi
-    echo "    Info.plist LSEnvironment.PYTHONNOUSERSITE = 1"
-}
-
 T_STEP=$SECONDS
 note "Vendoring prefix dependencies"
 vendor_prefix_deps
@@ -945,9 +1023,46 @@ note "Pruning Mach-O files with unresolvable prefix deps"
 prune_unfixable_machos
 note "Thinning universal Mach-O files to arm64"
 thin_bundle_arm64
-note "Setting PYTHONNOUSERSITE=1 in Info.plist"
-inject_pythonnousersite
 echo "    [Step 6 (Vendor prefix deps): $((SECONDS - T_STEP))s]"
+
+# ---------------------------------------------------------------------------
+# Step 6.5: Write Info.plist
+#
+# Replace the Info.plist that Qt's template generated with Info.plist.in. It
+# runs after the Mach-O files are final, so LSMinimumSystemVersion is what the
+# bundled binaries require, and before the signature seals the plist.
+#
+# The copyright year is the commit year, from SOURCE_DATE_EPOCH when set, so
+# two builds of one commit stamp the same plist. LSEnvironment sets
+# PYTHONNOUSERSITE=1 so a Finder/open launch of pilot never adds
+# ~/Library/Python/<X.Y>/lib/python/site-packages to sys.path, which on dev
+# machines may carry a second PySide6 and Qt runtime.
+# ---------------------------------------------------------------------------
+
+write_info_plist() {
+    local plist="$APP/Contents/Info.plist" epoch year minos
+    epoch=${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}
+    year=$(date -u -r "$epoch" +%Y)
+    minos=$(bundle_minos "$APP")
+    [[ -n "$minos" ]] || fail "no Mach-O under $APP names a minimum macOS"
+
+    rm -f "$plist"
+    sed -e "s|@IDENTIFIER@|$BUNDLE_ID|" \
+        -e "s|@SHORT_VERSION@|$SHORT_VERSION|" \
+        -e "s|@BUNDLE_VERSION@|$BUNDLE_VERSION|" \
+        -e "s|@MIN_MACOS@|$minos|" \
+        -e "s|@YEAR@|$year|" \
+        -e '/^<!--$/,/^-->$/d' -e '/vim: set/d' \
+        "$SCRIPT_DIR/Info.plist.in" > "$plist"
+    ! grep -q '@[A-Z_]*@' "$plist" || fail "unfilled placeholder in $plist"
+    plutil -lint -s "$plist" || fail "generated Info.plist is malformed"
+}
+
+T_STEP=$SECONDS
+note "Writing Info.plist"
+write_info_plist
+check_info_plist "$APP"
+echo "    [Step 6.5 (Write Info.plist): $((SECONDS - T_STEP))s]"
 
 # ---------------------------------------------------------------------------
 # Step 7: Ad-hoc codesign
@@ -1099,6 +1214,7 @@ if [[ $SKIP_CHECK -eq 0 ]]; then
     note "Found app: $DMG_APP"
     note "Static scan (DMG) for dependency path references"
     check_self_contained "$DMG_APP"
+    check_info_plist "$DMG_APP"
     DMG_BINARY="$DMG_APP/Contents/MacOS/$(basename "$DMG_APP" .app)"
     smoke_check "$DMG_BINARY" "DMG"
     echo ""
