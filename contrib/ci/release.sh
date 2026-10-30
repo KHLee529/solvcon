@@ -94,8 +94,12 @@ stage_guitest() {
     GUITEST_MNT="$GUITEST_ROOT/mnt"
     trap cleanup_guitest EXIT
 
+    # `bundle-with-aqt.sh verify` may leave the artifact attached, and an
+    # attached image cannot be attached again; a copy is a separate image.
+    cp "$dmg" "$GUITEST_ROOT/pilot.dmg"
     mkdir "$GUITEST_MNT"
-    hdiutil attach -nobrowse -readonly -mountpoint "$GUITEST_MNT" "$dmg" >/dev/null
+    hdiutil attach -nobrowse -readonly -mountpoint "$GUITEST_MNT" \
+        "$GUITEST_ROOT/pilot.dmg" >/dev/null
     app=$(find "$GUITEST_MNT" -maxdepth 2 -name '*.app' -type d -print -quit)
     [[ -n "$app" ]] || { echo "no .app found in $dmg" >&2; return 1; }
     bin="$app/Contents/MacOS/$(basename "$app" .app)"
