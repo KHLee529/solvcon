@@ -51,6 +51,11 @@ stage_setup() {
 # The bundler builds the pilot with the flags it needs to deploy it, so build
 # goes through it instead of `make pilot`.
 stage_build() {
+    # rcc embeds each resource's modification time, which is the checkout
+    # time for a source and the build time for a generated shader; it uses
+    # SOURCE_DATE_EPOCH instead when set, so two builds of a commit match.
+    SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+    export SOURCE_DATE_EPOCH
     make bundle RELEASE_OUTPUT="$BUNDLE_OUTPUT"
 }
 
