@@ -4,7 +4,7 @@ name: release
 # runs the whole pipeline and drafts a GitHub release from it; a manual run
 # exercises the same stages on any ref without publishing anything.
 #
-# The stage logic lives in contrib/ci/release.sh so it can be rerun by hand.
+# Each stage is a `make bundle*` target, so it can be rerun by hand.
 
 on:
   push:
@@ -39,8 +39,7 @@ jobs:
 
     strategy:
       matrix:
-        # Add a platform here together with its branch in release.sh. The aqt
-        # bundler supports Apple Silicon only.
+        # The aqt bundler supports Apple Silicon only.
         include:
           - os: macos-26
 
@@ -50,7 +49,6 @@ jobs:
       # A tag push names the artifacts after the tag; a manual run takes the
       # version input and leaves the short hash as the fallback.
       VERSION: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
-      DIST_DIR: dist
 
     steps:
 
@@ -60,13 +58,24 @@ jobs:
           fetch-depth: 1
 
       - name: setup
-        run: contrib/ci/release.sh setup
+        run: |
+          make bundle-prepare
+          make bundle-precheck
 
+      # rcc embeds each resource's modification time, which is the checkout
+      # time for a source and the build time for a generated shader; it uses
+      # SOURCE_DATE_EPOCH instead when set, so two builds of a commit match.
       - name: build
-        run: contrib/ci/release.sh build
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          make bundle RELEASE_OUTPUT=dist
 
       - name: package
-        run: contrib/ci/release.sh package
+        run: |
+          name="solvcon-pilot-${VERSION:-$(git rev-parse --short HEAD)}-macos-$(uname -m).dmg"
+          mv dist/pilot.dmg "dist/$name"
+          (cd dist && shasum -a 256 "$name" > "$name.sha256")
+          ls -lh dist
 
       - uses: actions/upload-artifact@v7
         with:
@@ -96,15 +105,14 @@ jobs:
 
     steps:
 
-      # The tests need the Makefile, the scripts they run, and the GUI tests
-      # only. Leaving solvcon/ out keeps the GUI tests on the bundled package.
-      # Cone mode matches directories, not files, hence off.
+      # The tests need the Makefile, the bundler, and the GUI tests only.
+      # Leaving solvcon/ out keeps the GUI tests on the bundled package. Cone
+      # mode matches directories, not files, hence off.
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref || github.ref }}
           sparse-checkout: |
             Makefile
-            contrib/ci/release.sh
             contrib/bundle/bundle-with-aqt.sh
             tests/conftest.py
             tests/gui/
@@ -117,8 +125,9 @@ jobs:
 
       - name: unbox test
         run: |
+          (cd dist && shasum -a 256 -c ./*.sha256)
           for dmg in dist/*.dmg; do
-            contrib/ci/release.sh unbox "$dmg"
+            make bundle-test RELEASE_ARTIFACT="$dmg"
           done
 
       # Run the GUI tests in the app even when the verification above failed,
@@ -127,7 +136,7 @@ jobs:
         if: success() || failure()
         run: |
           for dmg in dist/*.dmg; do
-            contrib/ci/release.sh guitest "$dmg"
+            make bundle-guitest RELEASE_ARTIFACT="$dmg"
           done
 
   publish:
